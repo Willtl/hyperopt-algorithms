@@ -7,16 +7,15 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
-from optuna.pruners import HyperbandPruner
-from optuna.study import create_study
+from fvcore.nn import FlopCountAnalysis
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-EPOCHS = 10
-TRIALS = 30
+EPOCHS = 5
+TRIALS = 20
 LR = [1e-5, 1e-1]
-BATCH_SIZE = [64, 128, 256, 512]
-HIDDEN_sIZE = [64, 128, 256, 512]
+BATCH_SIZE = [64, 128, 256]
+HIDDEN_SIZE = [64, 128, 256]
 NUM_LAYERS = [1, 3]
 OPT_RANDOM_RESIZE_CROP = 1
 OPT_RANDOM_FLIP = 1
@@ -47,11 +46,11 @@ class MLP(nn.Module):
 # Function to get data loaders
 def get_data_loaders(train_transforms: transforms.Compose, test_transforms: transforms.Compose, batch_size: int) -> Tuple[DataLoader, DataLoader]:
     # Load MNIST training data
-    trainset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=train_transforms)
+    trainset = torchvision.datasets.MNIST(root='../data', train=True, download=True, transform=train_transforms)
     trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=0)
 
     # Define test loader
-    testset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=test_transforms)
+    testset = torchvision.datasets.MNIST(root='../data', train=False, download=True, transform=test_transforms)
     testloader = DataLoader(testset, batch_size=256, shuffle=False, num_workers=0)
 
     return trainloader, testloader
@@ -105,16 +104,16 @@ def evaluate_model(model: nn.Module, dataloader: DataLoader, device: torch.devic
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-
     accuracy = correct / total
+
     return accuracy
 
 
 # Define objective function for Optuna study
-def objective(trial: optuna.trial.Trial) -> float:
+def objective(trial: optuna.trial.Trial) -> Tuple[float, int]:
     lr = trial.suggest_float('lr', LR[0], LR[1], log=True)
     batch_size = trial.suggest_categorical('batch_size', BATCH_SIZE)
-    hidden_size = trial.suggest_categorical('hidden_size', HIDDEN_sIZE)
+    hidden_size = trial.suggest_categorical('hidden_size', HIDDEN_SIZE)
     num_layers = trial.suggest_int('num_layers', NUM_LAYERS[0], NUM_LAYERS[1])
 
     train_transforms, test_transforms = get_transforms(trial)
@@ -124,10 +123,11 @@ def objective(trial: optuna.trial.Trial) -> float:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model, criterion, optimizer = create_model(lr, hidden_size, num_layers, device)
+    flops = FlopCountAnalysis(model, inputs=(torch.randn(1, 28 * 28).to(device),)).total()
 
     tqdm.write(f"Current trial: learning rate {lr}, batch size {batch_size}, hidden size {hidden_size}, num_layers {num_layers}")
     tqdm.write(f"Training transforms: {train_transforms}")
-    time.sleep(0.1)
+    time.sleep(0.1)  # forcing time between log and tqdm bar because they're still overlapping even with tqdm.write - prob. due to tqdm version/bug
 
     val_accuracy = 0
     for epoch in range(EPOCHS):
@@ -140,36 +140,46 @@ def objective(trial: optuna.trial.Trial) -> float:
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            loop.set_description(f"Epoch [{epoch + 1}/{EPOCHS}] - Validation accuracy: {val_accuracy}")
+            loop.set_description(f"Epoch [{epoch + 1}/{EPOCHS}] - Validation accuracy: {val_accuracy} - Num. parameters: {flops}")
 
         val_accuracy = evaluate_model(model, testloader, device)
-        trial.report(val_accuracy, epoch)
 
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
+        # It seems like prune is not supported for multivariate
+        # if trial.should_prune():
+        #     raise optuna.exceptions.TrialPruned()
 
-    return val_accuracy
+    return flops, val_accuracy
 
 
-# Main function to setup Optuna study and run optimization
 def main():
     optuna.logging.enable_default_handler()
-    pruner = HyperbandPruner()
-    study = create_study(pruner=pruner, direction='maximize', study_name="MNIST_MLP_optimization")
+    sampler = optuna.samplers.TPESampler(multivariate=True)
+    pruner = optuna.pruners.SuccessiveHalvingPruner()
+    study = optuna.create_study(
+        sampler=sampler,
+        pruner=pruner,
+        directions=["minimize", "maximize"],
+        study_name="MNIST_MLP_optimization"
+    )
 
     study.optimize(objective, n_trials=TRIALS)
 
-    best_params = study.best_params
-    best_accuracy = study.best_value
-
-    tqdm.write(f"\nBest accuracy: {best_accuracy}\n")
-    tqdm.write(f"Best hyperparameters: {best_params}\n")
-
-    fig = optuna.visualization.plot_optimization_history(study)
+    fig = optuna.visualization.plot_pareto_front(study, target_names=["FLOPS", "accuracy"])
     fig.show()
 
-    fig = optuna.visualization.plot_intermediate_values(study)
-    fig.show()
+    print(f"Number of trials on the Pareto front: {len(study.best_trials)}")
+
+    trial_with_highest_accuracy = max(study.best_trials, key=lambda t: t.values[1])
+    print(f"Trial with highest accuracy: ")
+    print(f"\tnumber: {trial_with_highest_accuracy.number}")
+    print(f"\tparams: {trial_with_highest_accuracy.params}")
+    print(f"\tvalues: {trial_with_highest_accuracy.values}")
+
+    # Learn which hyperparameters are affecting the flops most with hyperparameter importance.
+    fig2 = optuna.visualization.plot_param_importances(
+        study, target=lambda t: t.values[0], target_name="flops"
+    )
+    fig2.show()
 
 
 if __name__ == '__main__':
