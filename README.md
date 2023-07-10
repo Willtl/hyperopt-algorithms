@@ -4,15 +4,7 @@ Collection of scripts designed for hyperparameter optimization using various sta
 ## Contents
 - Optuna script for hyperparameter tuning using Bayesian optimization, with Hyperband pruner, illustrated on an MLP model with the MNIST dataset.
 - Further scripts implementing other optimization methods coming soon!
-
-## Getting Started
-1. Clone this repository to your local machine using `https://github.com/<Your Github Username>/HyperOpt-Algorithms.git`
-2. Install all dependencies from the `requirements.txt` file using `pip install -r requirements.txt`
-3. Run the scripts individually to optimize your model's hyperparameters.
-
-## Contribution
-Contributions, issues, and feature requests are welcome. Feel free to check the issues page if you want to contribute.
-
+ 
 ## License
 This project is licensed under the terms of the MIT license.
 
@@ -20,5 +12,5 @@ This project is licensed under the terms of the MIT license.
 - PyTorch for the MLP model and MNIST dataset.
 - Optuna for the hyperparameter tuning framework.
 
-Please note that the above script is an example of using Optuna, a Python library for hyperparameter optimization, with PyTorch on the MNIST dataset. Stay tuned for more scripts that showcase different optimization techniques!
+Please note that the above script is an example of using Optuna, a Python library for hyperparameter optimization, with PyTorch on the MNIST dataset.  
 ****
